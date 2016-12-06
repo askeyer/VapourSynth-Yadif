@@ -25,8 +25,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <vapoursynth/VapourSynth.h>
-#include <vapoursynth/VSHelper.h>
+#include <VapourSynth.h>
+#include <VSHelper.h>
 
 #ifdef VS_TARGET_CPU_X86
 #define MAX_VECTOR_SIZE 256
@@ -44,6 +44,13 @@ struct YadifData
     int order;
     int field;
     int mode;
+};
+
+enum VSFieldBased
+{
+    fbProgressive = 0,
+    fbBFF,
+    fbTFF
 };
 
 static void VS_CC yadifInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
@@ -148,12 +155,12 @@ static void filter_line(const T1 *prev, const T1 *cur, const T1 *next, T1 * VS_R
         const V2 vscore_dir4 = vdir4l + vdir4m + vdir4r;
         
         
-        V2b vscoreb = vscore_dir1 < vscore_dir0;
+        V2b vscoreb = vscore_dir1 < vscore_dir0; // >
         V2 vscore = select(vscoreb, vscore_dir1, vscore_dir0);
         V2 vpred_dir = select(vscoreb, vone, vzero);
         
         vscoreb = vscore_dir2 < vscore;
-        vscore = select(vscoreb, vscore_dir2, vscore);
+        vscore = select(vscoreb, vscore_dir2, vscore); // min
         vpred_dir = select(vscoreb, vtwo, vpred_dir);
         
         vscoreb = vscore_dir3 < vscore;
@@ -212,7 +219,7 @@ void filter_line<float, float, int32_t, Vec8f, Vec8f, Vec8fb, 8>(const float *pr
         const Vec8f vnext2 = Vec8f().load_a(next2 + x);
         const Vec8f vnext2n2 = Vec8f().load_a(next2 - 2 * stride + x);
         const Vec8f vnext2p2 = Vec8f().load_a(next2 + 2 * stride + x);
-                
+
         const Vec8f c = Vec8f().load_a(cur - stride + x);
         const Vec8f d = (vprev2 + vnext2) * vpointFive;
         const Vec8f e = Vec8f().load_a(cur + stride + x);
@@ -337,7 +344,7 @@ static void filter_line(const T1 *prev, const T1 *cur, const T1 *next, T1 * VS_R
 
         // edi
         int spatial_pred = (c + e) >> 1;
-        int spatial_score = std::abs(cur[-stride+x-1] - cur[stride+x-1]) + std::abs(c - e) + 
+        int spatial_score = std::abs(cur[-stride+x-1] - cur[stride+x-1]) + std::abs(c - e) +
                             std::abs(cur[-stride+x+1] - cur[stride+x+1]) - 1;
 
         int score = std::abs(cur[-stride+x-2] - cur[stride+x]) +
@@ -407,7 +414,7 @@ void filter_line<float>(const float *prev, const float *cur, const float *next, 
 
         // edi
         float spatial_pred = (c + e) * 0.5f;
-        float spatial_score = std::abs(cur[-stride+x-1] - cur[stride+x-1]) + std::abs(c - e) + 
+        float spatial_score = std::abs(cur[-stride+x-1] - cur[stride+x-1]) + std::abs(c - e) +
                               std::abs(cur[-stride+x+1] - cur[stride+x+1]);
 
         float score = std::abs(cur[-stride+x-2] - cur[stride+x]) +
@@ -652,10 +659,10 @@ static const VSFrameRef *VS_CC yadifGetFrame(int n, int activationReason, void *
         const VSFrameRef *next = vsapi->getFrameFilter((n < d->vi_src->numFrames - 1) ? (n + 1) : ((d->vi_src->numFrames > 1) ? (d->vi_src->numFrames - 1) : 0), d->node, frameCtx);
 
         VSFrameRef *dst = vsapi->newVideoFrame(d->vi.format, d->vi.width, d->vi.height, src, core);
-        
+
         int err;
         const int fieldBased = int64ToIntS(vsapi->propGetInt(vsapi->getFramePropsRO(src), "_FieldBased", 0, &err));
-        const int tff = (fieldBased == 1) ? 0 : ((fieldBased == 2) ? 1 : d->order);
+        const int tff = (fieldBased == fbBFF) ? 0 : ((fieldBased == fbTFF) ? 1 : d->order);
 
         const int parity = (d->mode & 1) ? ((ndst & 1) ^ (tff ^ 1)) : ((d->field == -1) ? (tff ^ 1) : (d->field ^ 1));
 
@@ -688,7 +695,7 @@ static const VSFrameRef *VS_CC yadifGetFrame(int n, int activationReason, void *
         }
 
         VSMap *props = vsapi->getFramePropsRW(dst);
-        vsapi->propSetInt(props, "_FieldBased", 0, paReplace);
+        vsapi->propSetInt(props, "_FieldBased", fbProgressive, paReplace);
 
         if (d->mode & 1)
         {
@@ -790,8 +797,8 @@ static void VS_CC yadifCreate(const VSMap *in, VSMap *out, void *userData, VSCor
     vsapi->createFilter(in, out, "Yadif", yadifInit, yadifGetFrame, yadifFree, fmParallel, 0, data, core);
 }
 
-
-////////////////////////////////////////////
+//////////////////////////////////////////
+// Init
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin)
 {
